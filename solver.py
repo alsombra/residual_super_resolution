@@ -1,10 +1,14 @@
 import torch
 import torch.nn as nn
 import os
+from torchvision import transforms
 from torchvision.utils import save_image, make_grid
 from model import SRMD
 import numpy as np
-from data_loader import Scaling, Scaling01
+from data_loader import Scaling, Scaling01, ImageFolder, random_downscale
+from utils import Kernels, load_kernels
+from PIL import Image,ImageDraw
+
 
 torch.set_default_tensor_type(torch.DoubleTensor)
 
@@ -16,18 +20,22 @@ class Solver(object):
 
         # Model hyper-parameters
         self.num_blocks = config.num_blocks  # num_blocks = 11
-        self.num_channels = config.num_channels  # num_channels = 18
+        self.num_channels = config.num_channels  # num_channels = 6
         self.conv_dim = config.conv_dim # conv_dim = 128
         self.scale_factor = config.scale_factor  # scale_factor = 2
 
         # Training settings
-        self.total_step = config.total_step # 20000
+        self.total_step = config.total_step # 50000
         self.lr = config.lr 
         self.beta1 = config.beta1 # 0.5  ????????????????? testar 0.9 ou 0.001
         self.beta2 = config.beta2 # 0.99  ???????????????
         self.trained_model = config.trained_model
         self.use_tensorboard = config.use_tensorboard
         self.start_step = -1
+        
+        #Test settings
+        self.use_test_set = config.use_test_set
+        self.test_image_path = config.test_image_path
         
         # Path and step size
         self.log_path = config.log_path
@@ -87,6 +95,61 @@ class Solver(object):
     def detach(self, x):  # NOT USED. To learn more SEE https://pytorch.org/blog/pytorch-0_4_0-migration-guide/
         return x.data
     #############################################################
+    def get_trio_images(self, lr_image,hr_image, reconst):
+        tmp1 = lr_image.data.cpu().numpy().transpose(0,2,3,1)*255
+        image_list = [np.array(Image.fromarray(tmp1.astype(np.uint8)[i]).resize((128,128), Image.BICUBIC)) for i in range(self.data_loader.batch_size)]
+        image_hr_bicubic= np.stack(image_list)
+        image_hr_bicubic_single = np.squeeze(image_hr_bicubic)
+        print('hr_bicubic_single:', image_hr_bicubic_single.shape)
+        #return this ^
+        image_hr_bicubic = image_hr_bicubic.transpose(0,3,1,2)
+        image_hr_bicubic = Scaling(image_hr_bicubic)
+        image_hr_bicubic = torch.from_numpy(image_hr_bicubic).double().to(self.device) # NUMPY to TORCH
+        hr_image_hat = reconst + image_hr_bicubic
+        hr_image_hat = hr_image_hat.data.cpu().numpy()
+        hr_image_hat = Scaling01(hr_image_hat)
+        hr_image_hat = np.squeeze(hr_image_hat).transpose((1, 2, 0))
+        hr_image_hat = (hr_image_hat*255).astype(np.uint8)
+        print('hr_image_hat : ', hr_image_hat.shape)
+        #return this ^
+        hr_image = hr_image.data.cpu().numpy().transpose(0,2,3,1)*255
+        hr_image = np.squeeze(hr_image.astype(np.uint8))
+        #return this ^
+        return Image.fromarray(image_hr_bicubic_single), Image.fromarray(hr_image_hat), Image.fromarray(hr_image)
+
+    def create_grid(self, lr_image,hr_image, reconst):
+        'generate grid image: LR Image | HR image Hat (from model) | HR image (original)'
+        'lr_image = lr_image tensor from dataloader (can be batch)'
+        'hr_image = hr_image tensor from dataloader (can be batch)'
+        'reconst = output of model (HR residual)'
+        tmp1 = lr_image.data.cpu().numpy().transpose(0,2,3,1)*255
+        image_list = [np.array(Image.fromarray(tmp1.astype(np.uint8)[i]).resize((128,128), Image.BICUBIC)) for i in range(self.data_loader.batch_size)]
+        image_hr_bicubic= np.stack(image_list).transpose(0,3,1,2)
+        image_hr_bicubic = Scaling(image_hr_bicubic)
+        image_hr_bicubic = torch.from_numpy(image_hr_bicubic).double().to(self.device) # NUMPY to TORCH
+        hr_image_hat = reconst + image_hr_bicubic
+                
+        hr_image_hat = hr_image_hat.data.cpu().numpy()
+        hr_image_hat = Scaling01(hr_image_hat)
+        hr_image_hat = torch.from_numpy(hr_image_hat).double().to(self.device) # NUMPY to TORCH
+
+        pairs = torch.cat((image_hr_bicubic.data, \
+                                hr_image_hat.data,\
+                                hr_image.data), dim=3)
+        grid = make_grid(pairs, 1) 
+        tmp = np.squeeze(grid.cpu().numpy().transpose((1, 2, 0)))
+        grid = (255 * tmp).astype(np.uint8)
+        return grid
+    
+    def img_add_info(self, img, epoch, loss):
+        'receives tensor as img'
+        added_text = Image.new('RGB', (500, img.shape[0]), color = 'white')
+        d = ImageDraw.Draw(added_text)
+        d.text((10,10), "model trained for {} epochs, loss (comparing residuals): {:.4f}".format(epoch, loss.item()), fill='black')
+        imgs_comb = np.hstack((np.array(img), added_text))
+        imgs_comb = Image.fromarray(imgs_comb)
+        return imgs_comb
+    
     def train(self):
         self.model.train()
 
@@ -130,56 +193,26 @@ class Solver(object):
               # Sample images
 
             if (step+1) % self.sample_step == 0:
-                from PIL import Image
                 self.model.eval()
                 reconst = self.model(x)
-
-                #tmp = nn.functional.interpolate(input = x.data[:,0:3,:], scale_factor=scale_factor, mode = 'nearest')
-                tmp1 = lr_image.data.cpu().numpy().transpose(0,2,3,1)*255
-                image_list = [np.array(Image.fromarray(tmp1.astype(np.uint8)[i]).resize((128,128), Image.BICUBIC)) for i in range(self.data_loader.batch_size)]
-                image_hr_bicubic= np.stack(image_list).transpose(0,3,1,2)
-                image_hr_bicubic = Scaling(image_hr_bicubic)
-                image_hr_bicubic = torch.from_numpy(image_hr_bicubic).double().to(self.device) # NUMPY to TORCH
-                hr_image_hat = reconst + image_hr_bicubic
-                
-                hr_image_hat = hr_image_hat.data.cpu().numpy()
-                hr_image_hat = Scaling01(hr_image_hat)
-                hr_image_hat = torch.from_numpy(hr_image_hat).double().to(self.device) # NUMPY to TORCH
-
-                pairs = torch.cat((image_hr_bicubic.data, \
-                                hr_image_hat.data,\
-                                hr_image.data), dim=3)
-                grid = make_grid(pairs, 1) 
-                tmp = np.squeeze(grid.cpu().numpy().transpose((1, 2, 0)))
-                tmp = (255 * tmp).astype(np.uint8)
-                Image.fromarray(tmp).save('./samples/test_%d.jpg' % (step + 1))
-
-#             # Sample images
-#             if (step+1) % self.sample_step == 0:
-#                 self.model.eval()  #aqui ele botou o modelo em modo eval() mas esqueceu de voltar pro modo train
-#                 reconst = self.model(x)
-
-#                 def to_np(x):
-#                     return x.data.cpu().numpy()
-                
-#                 #tmp = nn.functional.interpolate(input = x.data[:,0:3,:], scale_factor=self.scale_factor, mode = 'nearest') ####NEAREST É O MELHOR PRA COMPARAR?##########
-#                 tmp = x.data[:,0:3,:]
-#                 for i in range(tmp.shape[0]):
-#                     Image.fromtmp[i].
-#                 #talvez seja melhor fazer um upsample bicubico pra comparar! Segue:
-#                 # image_lr = to_np(x)
-#                 # simple_upscaled_lr = image_lr.resize((128,128),Image.BICUBIC)
-#                 # tmp = simple_upscaled_lr
-#                 pairs = torch.cat((tmp.data[0:2,:,:], reconst.data[0:2,:,:], y.data[0:2,:,:]), dim=3)
-#                 grid = make_grid(pairs, 2)
-#                 from PIL import Image
-#                 tmp = np.squeeze(grid.cpu().numpy().transpose((1, 2, 0)))
-#                 tmp = (255 * tmp).astype(np.uint8)
-#                 Image.fromarray(tmp).save('./samples/test_%d.jpg' % (step + 1))
+                tmp = self.create_grid(lr_image,hr_image, reconst)
+                imgs_comb = self.img_add_info(tmp, step+1, loss)                
+                #from IPython.display import display
+                grid_PIL = imgs_comb
+                grid_PIL.save('./samples/test_{}.jpg'.format(step + 1))
+                if self.data_loader.batch_size == 1: #only saves separate images if batch == 1
+                    lr_image_np = lr_image.data.cpu().numpy().transpose(0,2,3,1)*255
+                    lr_image_np = Image.fromarray(np.squeeze(lr_image_np).astype(np.uint8))
+                    hr_bic, hr_hat, hr = self.get_trio_images(lr_image,hr_image, reconst)
+                    random_number = np.random.rand(1)[0]
+                    lr_image_np.save('./samples/test_{}_lr.png'.format(step + 1))
+                    hr_bic.save('./samples/test_{}_hr_bic.png'.format(step + 1))
+                    hr_hat.save('./samples/test_{}_hr_hat.png'.format(step + 1))
+                    hr.save('./samples/test_{}_hr.png'.format(step + 1))
 
             # Save check points
             if (step+1) % self.model_save_step == 0:                
-                self.save(step, loss.item(), os.path.join(self.model_save_path, '{}.pth.tar'.format(str(step+1))))
+                self.save(step+1, loss.item(), os.path.join(self.model_save_path, '{}.pth.tar'.format(str(step+1))))
 
     def save(self, step, current_loss, filename):
         model = self.model.state_dict()
@@ -190,61 +223,122 @@ class Solver(object):
             'loss': str(current_loss)
             }, filename)
 
-    def valid(self, img_lr, img_hr): #receives batch from dataloader
-        'Receives a pair in the same dataloader batch format'
+    def test_and_error(self): #receives batch from dataloader
+        'You run it for a random batch from test_set. You can change batch_size for len(test_set)'
         self.model.eval()
-        x, y = img_lr, img_hr
-        x, y = x.to(self.device), y.to(self.device)
-        y = y.to(torch.float64)
-        print('x shape: ', x.shape)
-        print('y_shape: ', y.shape)
-        reconst = self.model(x)
+        epoch = self.start_step + 1 # if not loading trained start = 0 
+             # Reconst loss
         reconst_loss = nn.MSELoss()
+
+            # Data iter
+        data_iter = iter(self.data_loader)
+        lr_image, hr_image, x, y = next(data_iter)
+        lr_image, hr_image, x, y = lr_image.to(self.device), hr_image.to(self.device), x.to(self.device), y.to(self.device)
+
+        y = y.to(torch.float64)
+
+        reconst = self.model(x)
         loss = reconst_loss(reconst, y)
 
         # Print out log info 
         print("model trained for {} epochs, loss: {:.4f}".format(self.start_step, loss.item()))
-
-        tmp = nn.functional.interpolate(input = x.data[:,0:3,:], scale_factor=self.scale_factor, mode = 'nearest')
-                
-        pairs = torch.cat((tmp.data, reconst.data, y.data), dim=3)
-        grid = make_grid(pairs, 1)
-        from PIL import Image,ImageDraw
-        tmp = np.squeeze(grid.cpu().numpy().transpose((1, 2, 0)))
-        tmp = (255 * tmp).astype(np.uint8)
         
-        img = Image.new('RGB', (300, tmp.shape[0]), color = 'white')
-        d = ImageDraw.Draw(img)
-        d.text((10,10), "model trained for {} epochs, loss: {:.4f}".format(self.start_step, loss.item()), fill='black')
-        imgs_comb = np.hstack((np.array(tmp), img))
-        imgs_comb = Image.fromarray(imgs_comb)
-    
-        from IPython.display import display
-        grid_PIL = imgs_comb
-        grid_PIL.save('./test_results/valid_{}_{}.jpg'.format(self.start_step + 1,np.random.rand(1)))
+        tmp = self.create_grid(lr_image, hr_image, reconst)
+        grid_PIL = self.img_add_info(tmp, epoch, loss)  
+        
+        hr_bic, hr_hat, hr = self.get_trio_images(lr_image,hr_image, reconst)
+        
+        
+        lr_image_np = lr_image.data.cpu().numpy().transpose(0,2,3,1)*255
+        lr_image_np = Image.fromarray(np.squeeze(lr_image_np).astype(np.uint8))
 
-    def test(self, lr_image): #receives single image --> can be easily modified to handle multiple images
-        'receives single LR image as input. Returns LR image + (models approx) HR image concatenated'
+        random_number = np.random.rand(1)[0]
+                            
+        lr_image_np.save('./test_results/{:.3f}_lr_{}.png'.format(random_number, self.start_step + 1))
+        hr_bic.save('./test_results/{:.3f}_hr_bic_{}.png'.format(random_number, self.start_step + 1))
+        hr_hat.save('./test_results/{:.3f}_hr_hat_{}.png'.format(random_number, self.start_step + 1))
+        hr.save('./test_results/{:.3f}_hr_{}.png'.format(random_number, self.start_step + 1))
+        
+        #from IPython.display import display
+        grid_PIL.save('./test_results/{:.3f}_grid_{}.png'.format(random_number, self.start_step + 1))
+
+    def test(self): #receives single image --> can be easily modified to handle multiple images
+        'Takes single LR image as input. Returns LR image + (models approx) HR image concatenated'
+        'image location must be given by flag --test_image_path'
         self.model.eval()
-        # input (low-resolution image)
-        transform = transforms.Compose([
-                    transforms.Lambda(lambda x: Scaling(x)), # LR --> [0,1]
-                    transforms.Lambda(lambda x: randkern.ConcatDegraInfo(x))
-        ])
-        lr_image = transform(lr_image)
-        transform = transforms.ToTensor()
-        lr_image.to(torch.float64)
-        #Add one more dimension, the batch_size (to pass tensor to model with correct input shape)
-        lr_image_expanded = lr_image.reshape(1, lr_image.shape[0], lr_image.shape[1], lr_image.shape[2]) #ex: reshape(1,18,64,64)
-        x = lr_image_expanded
-        x = x.cuda() #cuda
-        reconst = self.model(x)
+        step = self.start_step + 1 # if not loading trained start = 0 
+        lr_image = Image.open(self.test_image_path)
+        lr_image_size = lr_image.size[0]
+        #CONSIDER RGB IMAGE
         
-        tmp = nn.functional.interpolate(input = x.data[:,0:3,:], scale_factor=self.scale_factor, mode = 'nearest')
+        from utils import Kernels, load_kernels
+        K, P = load_kernels(file_path='kernels/', scale_factor=2)
+        randkern = Kernels(K, P)
 
-        pairs = torch.cat((tmp.data[0:2,:], reconst.data[0:2,:]),dim=3)
-        grid = make_grid(pairs, 1)
-        from PIL import Image
+        # get LR_RESIDUAL --> [-1,1]
+        transform_to_vlr = transforms.Compose([
+                            transforms.Lambda(lambda x: randkern.RandomBlur(x)), #random blur
+                            transforms.Lambda(lambda x: random_downscale(x,self.scale_factor)), #random downscale
+                            transforms.Resize((lr_image_size, lr_image_size), Image.BICUBIC) #upscale pro tamanho LR
+                    ])
+        lr_image_hat = transform_to_vlr(lr_image)
+        lr_residual = np.array(lr_image).astype(np.float32) - np.array(lr_image_hat).astype(np.float32)
+        lr_residual_scaled = Scaling(lr_residual)
+
+         # LR_image_scaled + LR_residual_scaled (CONCAT) ---> TO TORCH
+
+        #lr_image_with_kernel = self.randkern.ConcatDegraInfo(lr_image_scaled)
+        #lr_image_with_resid  = np.concatenate((lr_image_with_kernel, lr_residual_scaled), axis=-1)
+        lr_image_scaled = Scaling(lr_image)
+        lr_image_with_resid  = np.concatenate((lr_image_scaled, lr_residual_scaled), axis=-1)
+        lr_image_with_resid = torch.from_numpy(lr_image_with_resid).float().to(self.device) # NUMPY to TORCH
+
+        # LR_image to torch
+
+        lr_image_scaled = torch.from_numpy(lr_image_scaled).float().to(self.device) # NUMPY to TORCH
+
+        #Transpose - Permute since for model we need input with channels first
+        lr_image_scaled = lr_image_scaled.permute(2,0,1) 
+        lr_image_with_resid = lr_image_with_resid.permute(2,0,1)
+
+        lr_image_with_resid = lr_image_with_resid.unsqueeze(0) #just add one dimension (index on batch)
+        lr_image_scaled = lr_image_scaled.unsqueeze(0)
+
+        lr_image, x = lr_image_scaled.to(torch.float64), lr_image_with_resid.to(torch.float64) 
+        lr_image, x = lr_image.to(self.device), x.to(self.device)
+
+        x = x.to(torch.float64)
+
+        reconst = self.model(x)
+
+        tmp1 = lr_image.data.cpu().numpy().transpose(0,2,3,1)*255
+        image_list = [np.array(Image.fromarray(tmp1.astype(np.uint8)[i]).resize((128,128), Image.BICUBIC)) \
+                      for i in range(self.data_loader.batch_size)]
+        image_hr_bicubic= np.stack(image_list)
+        image_hr_bicubic_single = np.squeeze(image_hr_bicubic)
+        #return this ^
+        image_hr_bicubic = image_hr_bicubic.transpose(0,3,1,2)
+        image_hr_bicubic = Scaling(image_hr_bicubic)
+        image_hr_bicubic = torch.from_numpy(image_hr_bicubic).double().to(self.device) # NUMPY to TORCH
+        hr_image_hat = reconst + image_hr_bicubic
+        hr_image_hat_np = hr_image_hat.data.cpu().numpy()
+        hr_image_hat_np_scaled = Scaling01(hr_image_hat_np)
+        hr_image_hat_np_scaled = np.squeeze(hr_image_hat_np_scaled).transpose((1, 2, 0))
+        hr_image_hat_np_png = (hr_image_hat_np_scaled*255).astype(np.uint8)
+        #return this ^
+
+        #Saving Image Bicubic and HR Image Hat
+        random_number = np.random.rand(1)[0]
+        Image.fromarray(image_hr_bicubic_single).save('./test_images/{:.3f}_hr_bic_{}.png'.format(random_number, 1))
+        Image.fromarray(hr_image_hat_np_png).save('./test_images/{:.3f}_hr_hat_{}.png'.format(random_number, 1))
+
+        #Create Grid
+        hr_image_hat_np_scaled = Scaling01(hr_image_hat_np)
+        hr_image_hat_torch = torch.from_numpy(hr_image_hat_np_scaled).double().to(self.device) # NUMPY to TORCH
+
+        pairs = torch.cat((image_hr_bicubic.data, \
+                        hr_image_hat_torch.data), dim=3)
+        grid = make_grid(pairs, 1) 
         tmp = np.squeeze(grid.cpu().numpy().transpose((1, 2, 0)))
         tmp = (255 * tmp).astype(np.uint8)
-        Image.fromarray(tmp).save('./test_results/test_%d.jpg' % (self.start_step + 1))
+        Image.fromarray(tmp).save('./test_images/{:.3f}_grid_{}.png'.format(random_number, 1))

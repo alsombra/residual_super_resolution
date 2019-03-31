@@ -37,7 +37,7 @@ torch.set_default_tensor_type(torch.DoubleTensor)
 #         return nn.Sequential(*layers)
 
 class SRMD(nn.Module):
-    def __init__(self, num_blocks=11, num_channels=21, conv_dim=128, scale_factor=1):
+    def __init__(self, num_blocks=11, num_channels=6, conv_dim=128, scale_factor=1):
         super(SRMD, self).__init__()
         self.num_channels = num_channels
         self.conv_dim = conv_dim

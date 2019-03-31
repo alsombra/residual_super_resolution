@@ -6,7 +6,7 @@ from solver import Solver
 import time
 import pickle
 
-DATA_PATH = '/data/antonio/img_align_celeba'
+DATA_PATH = '../data/img_align_celeba'
 
 
 def save_obj(obj, name ):
@@ -33,14 +33,11 @@ def main(config, scope):
     if not os.path.exists(config.model_save_path):
         os.makedirs(config.model_save_path)
     if not os.path.exists(config.result_path):
-        os.makedirs(config.result_path)
-
-    if config.mode == 'test':
-        config.batch_size = config.test_size
+        os.makedirs(config.result_path)   
 
     # Data loader
     data_loader = get_loader(config.image_path, config)
-
+    
     # Solver
     
     solver = Solver(data_loader, config)
@@ -60,16 +57,20 @@ def main(config, scope):
     if config.mode == 'train':
         solver.train()
     elif config.mode == 'test':
-        solver.test()
+        if config.use_test_set == 'yes':
+            solver.test_and_error()
+        elif config.use_test_set == 'no':
+            solver.test()
+    
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     # Model hyper-parameters
-    parser.add_argument('--image_size', type=int, default=40)  #LR img size
+    parser.add_argument('--image_size', type=int, default=40, help='LR image size')  #LR img size
     parser.add_argument('--num_blocks', type=int, default=11)
-    parser.add_argument('--num_channels', type=int, default=18)
+    parser.add_argument('--num_channels', type=int, default=6)
     parser.add_argument('--conv_dim', type=int, default=128)
     parser.add_argument('--scale_factor', type=int, default=2)
 
@@ -82,9 +83,14 @@ if __name__ == '__main__':
     parser.add_argument('--beta2', type=float, default=0.999)
     parser.add_argument('--trained_model', type=str, default=None) ########## mudei pra receber string
 
+    # Test
+    parser.add_argument('--use_test_set', type=str, default='no', choices=['yes', 'no'])
+    parser.add_argument('--test_image_path', type=str) #Use it when --use_test_set=no
+
     # Misc
     parser.add_argument('--mode', type=str, default='train', choices=['train', 'test'])
-    parser.add_argument("--iteration", type=int, default=0)
+    
+    parser.add_argument('--iteration', type=int, default=0)
     parser.add_argument('--use_tensorboard', type=str2bool, default=False)
 
     parser.add_argument('--log_path', type=str, default='./logs')
@@ -104,7 +110,9 @@ if __name__ == '__main__':
     config.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Data path
-    #config.image_path = os.path.join("/data/antonio/img_align_celeba/train/")
+    
+    #config.image_path = os.path.join("../data/img_align_celeba/train/")
+  
     config.image_path = os.path.join(DATA_PATH, config.mode)##################
     print(config)
     print('-------------------------------------------------------------------------')
@@ -115,4 +123,4 @@ if __name__ == '__main__':
     start = time.time()
     main(config, scope=locals())
     end = time.time()
-    print('Tempo total foi {} horas'.format((end -start)/3600))
+    print('Tempo total foi {} horas'.format((end - start)/3600))

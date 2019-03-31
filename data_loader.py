@@ -15,9 +15,9 @@ torch.set_default_tensor_type(torch.DoubleTensor)
 def Scaling(image):
     return np.array(image) / 255.0
 
-def Scaling01(image):
-    np.array(image)
-    return (image - image.min())/(image.max() - image.min())
+def Scaling01(x):
+    np.array(x)
+    return (x - x.min())/(x.max() - x.min())
 
 def random_downscale(image, scale_factor):
     options = {0:Image.BICUBIC, 1: Image.BILINEAR, 2: Image.NEAREST}
@@ -41,7 +41,10 @@ class ImageFolder(data.Dataset):
     def __getitem__(self, index):
         """Read an image from a file and preprocesses it and returns."""
         image_path = self.image_paths[index]
-        image = Image.open(image_path).convert('RGB')
+        image = Image.open(image_path)
+        if np.array(image).shape==4:
+            image = np.array(image)[:,:,:3]
+            image = Image.fromarray(image)
 
         # target (high-resolution image)
         
@@ -94,9 +97,9 @@ class ImageFolder(data.Dataset):
 
         # LR_image_scaled + kernel_proj + LR_residual_scaled (CONCAT) ---> TO TORCH
 
-        lr_image_with_kernel = lr_image_scaled #self.randkern.ConcatDegraInfo(lr_image_scaled)
-        lr_image_with_kernel_resid  = np.concatenate((lr_image_with_kernel, lr_residual_scaled), axis=-1)
-        lr_image_kernel_resid = torch.from_numpy(lr_image_with_kernel_resid).float().to(self.device) # NUMPY to TORCH
+        lr_image_without_kernel = lr_image_scaled #self.randkern.ConcatDegraInfo(lr_image_scaled)
+        lr_image_with_resid  = np.concatenate((lr_image_without_kernel, lr_residual_scaled), axis=-1)
+        lr_image_with_resid = torch.from_numpy(lr_image_with_resid).float().to(self.device) # NUMPY to TORCH
 
         # LR_image to torch
         lr_image_scaled = torch.from_numpy(lr_image_scaled).float().to(self.device) # NUMPY to TORCH
@@ -104,10 +107,13 @@ class ImageFolder(data.Dataset):
         #Transpose - Permute since for model we need input with channels first
         lr_image_scaled = lr_image_scaled.permute(2,0,1) 
         hr_image_scaled = hr_image_scaled.permute(2,0,1) 
-        lr_image_kernel_resid = lr_image_kernel_resid.permute(2,0,1)
+        lr_image_with_resid = lr_image_with_resid.permute(2,0,1)
         hr_residual_scaled = hr_residual_scaled.permute(2,0,1)
         
-        return lr_image_scaled.to(torch.float64), hr_image_scaled.to(torch.float64), lr_image_kernel_resid.to(torch.float64), hr_residual_scaled.to(torch.float64)
+        return lr_image_scaled.to(torch.float64),\
+                hr_image_scaled.to(torch.float64), \
+                lr_image_with_resid.to(torch.float64), \
+                hr_residual_scaled.to(torch.float64)
 
 #     def __getitem__(self, index):
 #         """Read an image from a file and preprocesses it and returns."""

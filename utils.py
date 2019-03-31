@@ -25,7 +25,8 @@ class Kernels(object):
         
         self.indices = np.array(range(self.kernels.shape[-1])) #Ex: 0,1,...,357
         #agora escolhe random um kernel
-        self.randkern = self.RandomKernel(self.kernels, self.indices) #indices = [0,1,...,357]
+        self.randkern = self.RandomKernel(self.kernels, [self.indices]) #len([indices]) = 1 
+                                                                        #indices[0] = [0,1,...,358]
         
     def RandomBlur(self, image):
         kern = next(self.randkern) # aumenta o  
@@ -36,7 +37,7 @@ class Kernels(object):
         image = np.asarray(image)   # PIL Image to numpy array
         h, w = list(image.shape[0:2])
         ######
-        self.randkern.index =np.random.randint(len(self.indices))
+        self.randkern.index =np.random.randint(len(indices[0]))
         ######
         proj_kernl = self.kernels_proj[:, self.randkern.index]  # Caution!!
         n = len(proj_kernl)  # dim. of proj_kernl
@@ -50,10 +51,11 @@ class Kernels(object):
     class RandomKernel(object):
         def __init__(self, kernels, indices):
             self.len = kernels.shape[-1]         #Ex: 358
-            self.indices = indices               #Ex: [0,1...,357]
-            np.random.shuffle(self.indices)   #indices = [0,1,...,357] -> shuffle normal 
-            self.kernels = kernels[:, :, :, self.indices] #kernels, mas em uma ordem aleatoria
+            self.indices = indices               #Ex: [[0,1...,357]]
+            np.random.shuffle(self.indices[0])   #indices[0] = [0,1,...,357] -> shuffle normal 
+            self.kernels = kernels[:, :, :, self.indices[0]] #kernels, mas em uma ordem aleatoria
             self.index = 0
+
         def __iter__(self):
             return self
     
@@ -69,8 +71,7 @@ class Kernels(object):
 #            self.index += 1
 
             # RANDOM PICK (WITH REPLACEMENT)
-
-            self.index =np.random.randint(len(self.indices))
+            self.index =np.random.randint(len(indices[0]))
             n = self.kernels[:, :, :, self.index] #pega um kernel (aleatorio - posicao index)
             
             return n #retorna um kernel

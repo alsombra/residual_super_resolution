@@ -1,1 +1,0 @@
-python .\main.py --scale_factor=2 --mode='train' --num_workers=0 --total_step=50000 --model_save_step=1000 --sample_step=100 --num_channels=6 --batch_size=1 --image_size=64 --trained_model=None

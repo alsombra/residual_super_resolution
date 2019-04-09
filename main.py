@@ -7,7 +7,7 @@ import time
 import pickle
 
 DATA_PATH = '/data/antonio/img_align_celeba'
-
+torch.cuda.set_device(1)
 
 def save_obj(obj, name ):
     with open('obj/'+ name + '.pkl', 'wb') as f:
@@ -34,8 +34,8 @@ def main(config, scope):
         os.makedirs(config.model_save_path)
     if not os.path.exists(config.result_path):
         os.makedirs(config.result_path)
-    if not os.path.exists('/samples'):
-        os.makedirs('/samples')
+    if not os.path.exists('./samples'):
+        os.makedirs('./samples')
     if not os.path.exists(config.result_path + '/grids'):
         os.makedirs(config.result_path + '/grids')
     if not os.path.exists(config.result_path + '/HR_images'):
@@ -93,6 +93,7 @@ if __name__ == '__main__':
     # Training settings
     parser.add_argument('--total_step', type=int, default=200000)
     parser.add_argument('--batch_size', type=int, default=2)
+    parser.add_argument('--loss_function', type=str, default='l2', choices=['l1', 'l2'])
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--beta1', type=float, default=0.5)

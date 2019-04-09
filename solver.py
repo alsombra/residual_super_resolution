@@ -17,6 +17,7 @@ class Solver(object):
     def __init__(self, data_loader, config):
         # Data loader
         self.data_loader = data_loader
+        self.data_iter = iter(self.data_loader)
 
         # Model hyper-parameters
         self.num_blocks = config.num_blocks  # num_blocks = 11
@@ -26,6 +27,7 @@ class Solver(object):
 
         # Training settings
         self.total_step = config.total_step # 50000
+        self.loss_function = config.loss_function
         self.lr = config.lr 
         self.beta1 = config.beta1 # 0.5  ????????????????? testar 0.9 ou 0.001
         self.beta2 = config.beta2 # 0.99  ???????????????
@@ -158,11 +160,15 @@ class Solver(object):
         imgs_comb = Image.fromarray(imgs_comb)
         return imgs_comb    
     
+
     def train(self):
         self.model.train()
 
-        # Reconst loss
-        reconst_loss = nn.MSELoss()
+        # Reconstruction Loss 
+        if self.loss_function == 'l1':
+            reconst_loss = nn.L1Loss()
+        elif self.loss_function == 'l2':
+            reconst_loss = nn.MSELoss()
 
         # Data iter
         data_iter = iter(self.data_loader)
@@ -204,7 +210,7 @@ class Solver(object):
                 self.model.eval()
                 reconst = self.model(x)
                 tmp = self.create_grid(lr_image,hr_image, reconst)
-                imgs_comb = self.img_add_info(tmp, step+1, loss)                
+                imgs_comb = self.img_add_info(img_paths, tmp, step+1, loss)                
                 #from IPython.display import display
                 grid_PIL = imgs_comb
                 grid_PIL.save('./samples/test_{}.jpg'.format(step + 1))
@@ -220,7 +226,7 @@ class Solver(object):
 
             # Save check points
             if (step+1) % self.model_save_step == 0:                
-                self.save(step+1, loss.item(), os.path.join(self.model_save_path, '{}.pth.tar'.format(str(step+1))))
+                self.save(step+1, loss.item(), os.path.join(self.model_save_path, '{}.pth.tar'.format(self.loss_function.upper() + '_' + str(step+1))))
 
     def save(self, step, current_loss, filename):
         model = self.model.state_dict()
@@ -239,8 +245,7 @@ class Solver(object):
         reconst_loss = nn.MSELoss()
 
             # Data iter
-        data_iter = iter(self.data_loader)
-        img_paths, lr_image, hr_image, x, y = next(data_iter)
+        img_paths, lr_image, hr_image, x, y = next(self.data_iter)
         lr_image, hr_image, x, y = lr_image.to(self.device), hr_image.to(self.device), x.to(self.device), y.to(self.device)
 
         y = y.to(torch.float64)
